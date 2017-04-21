@@ -7,7 +7,7 @@ require 'trollop'
 require 'json'
 
 opts = Trollop::options do
-  version 'fg-diag-all v0.1 - 2017 Carrier CSE Team'
+  version 'fg-diag-all v0.1 - 2017'
   banner <<-EOS
 
 fg-diag-all -  a flexible multi-use tool for monitoring FG via CLI commands. Many commands useful for tracking
