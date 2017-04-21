@@ -29,36 +29,33 @@ where [options] are:
   opt :vdom, 'Specify this flag if FortiGate is in VDOM mode', :default => 'root'
   opt :npstart, 'For queries of NP data, enter the first NP to query (first would be np zero)', :default => 0
   opt :npstop, 'For queries of NP data, enter the last NP to query for', :default => 0
-  opt :format, "cacti, json, json-pretty, csv, tsv", :default => 'cacti'
-  opt :outfile, "To output result to file, specify the path/to/file", :type => :string
-  opt :nostdout, "By default results are sent to stdout set this to disable"
-  opt :perfstat, "summarized get sys perf stat (output only to log file, requires --logfile set)"
-  opt :dcefilter, "Filter for NP DCE counters (if no filter, dce will be skipped)", :type => :string
-  opt :hrxfilter, "Filter for NP HRX counters (if not filter, hrx will be skipped", :type => :string
-  opt :adropfilter, "Filter for NP anomaloy drop counters (if no filter anaomolies will be skipped", :type => :string
-  opt :logfile, "path/to/logfile, no log file if not specified", :type => :string
+  opt :format, 'cacti, json, json-pretty, csv, tsv', :default => 'cacti'
+  opt :outfile, 'To output result to file, specify the path/to/file', :type => :string
+  opt :nostdout, 'By default results are sent to stdout set this to disable'
+  opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile set)'
+  opt :dcefilter, 'Filter for NP DCE counters (if no filter, dce will be skipped)', :type => :string
+  opt :hrxfilter, 'Filter for NP HRX counters (if not filter, hrx will be skipped', :type => :string
+  opt :adropfilter, 'Filter for NP anomaloy drop counters (if no filter anaomolies will be skipped', :type => :string
+  opt :logfile, 'path/to/logfile, no log file if not specified', :type => :string
   opt :debug, 'Enable additional console output (will break cacti processing)'
 end
 
 ### script variables
 debug = opts[:debug]
 output = String.new
-sysdata = Hash.new
 counterdata = Hash.new
-jsondata = Hash.new
 dcedata = Hash.new
 hrxdata = Hash.new
 adropdata = Hash.new
-np = 0
 
 ###########################################################################
 ### Methods
 ###########################################################################
 def get_sys_perf_stat(ssh, vdom)
-  cpu = "CPU IDLE: "
-  mem = "MEM USED: "
-  con = "SESSIONS: "
-  cps = "CPS: "
+  cpu = 'CPU IDLE: '
+  mem = 'MEM USED: '
+  con = 'SESSIONS: '
+  cps = 'CPS: '
 
   if vdom == 'none'
     r = ssh.exec!('get system performance status')
@@ -73,7 +70,7 @@ def get_sys_perf_stat(ssh, vdom)
     rec = x.split
 
     ### Check for obvious errors due to cmds sent to FG
-    check_fgcmd_error(rec,'perfstat')
+    check_fgcmd_error(rec, 'perfstat', opts)
 
     rec.each_with_index do |element, index|
       #if filter.any? { |s| element.include? s}
@@ -149,7 +146,7 @@ def process_counters(r, filter, np, logfile, opts, type)
     rec = x.split
 
     ### Check for errors from FG due to command or vdom mode
-    check_fgcmd_error(rec, type)
+    check_fgcmd_error(rec, type, opts)
 
     ### For each element from the current line find "interesting" counters (as determined in the if statement)
     ### and add to hash "counters"
@@ -164,14 +161,14 @@ def process_counters(r, filter, np, logfile, opts, type)
   counters
 end
 
-def check_fgcmd_error(rec, type)
+def check_fgcmd_error(rec, type, opts)
   ### Check for error with commands sent to FG (usually due to vdom/non-vdom mode)
   i = 0
   while i <= 2  # Only need to look at first few lines to identify this issue
     rec.each do |element|
       if element.include?('Unknown')
         puts "FGCMDERROR: Unknown Action - while processing: #{type}"
-        logfile.write 'FGCMDERROR: Unknown Action - while processing #{type' if opts[:logfile]
+        logfile.write "FGCMDERROR: Unknown Action - while processing #{type}\n" if opts[:logfile]
         exit 1
       end
     end
@@ -251,18 +248,16 @@ begin
   end
 ### Rescue for SSH errors and others within ssh do
 rescue SocketError => e
-  connection_failed = true
-  puts "SOCKET ERROR: "+e.message
-  logfile.write "SOCKET ERROR: "+e.message"\n" if opts[:logfile]
+  puts 'SOCKET ERROR: '+e.message
+  logfile.write 'SOCKET ERROR: '+e.message+"\n" if opts[:logfile]
   exit 1
 rescue Net::SSH::AuthenticationFailed
-  connection_failed = true
-  puts "AUTH ERROR: "+e.message
-  logfile.write "AUTH ERROR: "+e.message+"\n" if opts[:logfile]
+  puts 'AUTH ERROR: '+e.message
+  logfile.write 'AUTH ERROR: '+e.message+"\n" if opts[:logfile]
   exit 1
 rescue Exception => e
-  puts "EXCEPTION: "+e.message
-  logfile.write "EXCEPTION: "+e.message+"\n" if opts[:logfile]
+  puts 'EXCEPTION: '+e.message
+  logfile.write 'EXCEPTION: '+e.message+"\n" if opts[:logfile]
   exit 1
 end
 
