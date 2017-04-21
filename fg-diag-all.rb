@@ -34,7 +34,7 @@ where [options] are:
   opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile set)'
   opt :dcefilter, 'Filter for NP DCE counters (if no filter, dce will be skipped)', :type => :string
   opt :hrxfilter, 'Filter for NP HRX counters (if not filter, hrx will be skipped', :type => :string
-  opt :adropfilter, 'Filter for NP anomaloy drop counters (if no filter anaomolies will be skipped', :type => :string
+  opt :adropfilter, 'Filter for NP anomaly drop counters (if no filter anaomolies will be skipped', :type => :string
   opt :logfile, 'path/to/logfile, no log file if not specified', :type => :string
   opt :debug, 'Enable additional console output (will break cacti processing)'
 end
