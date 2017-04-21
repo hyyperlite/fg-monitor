@@ -5,7 +5,6 @@
 require 'net/ssh'
 require 'trollop'
 require 'json'
-require 'logger'
 
 opts = Trollop::options do
   version 'fg-diag-all v0.1 - 2017 Carrier CSE Team'
@@ -23,9 +22,9 @@ Usage:
 where [options] are:
   EOS
 
-  opt :host, 'Fortigate IP', :default => '10.100.48.27'
+  opt :host, 'Fortigate IP', :default => '192.168.1.1'
   opt :user, 'FortiGate Login Username', :default => 'admin'
-  opt :pass, 'FortiGate Login Password', :default => 'fortinet'
+  opt :pass, 'FortiGate Login Password', :default => ''
   opt :vdom, 'Specify this flag if FortiGate is in VDOM mode', :default => 'root'
   opt :npstart, 'For queries of NP data, enter the first NP to query (first would be np zero)', :default => 0
   opt :npstop, 'For queries of NP data, enter the last NP to query for', :default => 0
@@ -51,7 +50,7 @@ adropdata = Hash.new
 ###########################################################################
 ### Methods
 ###########################################################################
-def get_sys_perf_stat(ssh, vdom)
+def get_sys_perf_stat(ssh, vdom, debug)
   cpu = 'CPU IDLE: '
   mem = 'MEM USED: '
   con = 'SESSIONS: '
@@ -62,7 +61,6 @@ def get_sys_perf_stat(ssh, vdom)
   else
     r = ssh.exec!("config global\n get system performance status")
   end
-
   r.downcase!
 
   # Process each line and extract consumable data
@@ -70,7 +68,7 @@ def get_sys_perf_stat(ssh, vdom)
     rec = x.split
 
     ### Check for obvious errors due to cmds sent to FG
-    check_fgcmd_error(rec, 'perfstat', opts)
+    check_fgcmd_error(rec, 'perfstat', debug)
 
     rec.each_with_index do |element, index|
       #if filter.any? { |s| element.include? s}
@@ -175,6 +173,7 @@ def check_fgcmd_error(rec, type, opts)
     i += 1
   end
 end
+
 ###########################################################################
 ### Start Main
 ###########################################################################
@@ -186,67 +185,7 @@ rescue
 end
 
 begin
-  Net::SSH.start(opts[:host], opts[:user], :password => opts[:pass],:timeout => 2) do |ssh|
-
-    logfile.write "--------#{Time.now}--------\n"
-
-    ### Get system performance stats for log file only (not for output to other systems/csv)
-    if opts[:perfstat]
-      perfdata = get_sys_perf_stat(ssh, opts[:vdom])
-      logfile.write perfdata
-    end
-
-    if opts[:dcefilter] || opts[:hrxfilter] || opts[:adropfilter]
-      ### Some stats are available only on per-np basis, we will loop through
-      ### and execute such commands in this loop
-
-      ### Call function to to get DCE counters and return formatted
-      for np in opts[:npstart]..opts[:npstop]
-        if opts[:dcefilter]
-          filter = opts[:dcefilter].downcase.split
-
-          ### Call method to retrieve DCE counters from FG
-          result = get_dce_counters(np, opts[:vdom], ssh)
-          puts "DCERESULT: #{result}" if debug
-
-          ### Call method to process, filter and add counter key/value pairs (returns hash)
-          dcedata.merge!(process_counters(result, filter, np, logfile, opts, 'dce'))
-          puts "DCEDATA: #{dcedata}" if debug
-        end
-      end
-
-      ### Call function to to get HRX counters and return formatted
-      for np in opts[:npstart]..opts[:npstop]
-        if opts[:hrxfilter]
-          filter = opts[:hrxfilter].downcase.split
-
-          ### Call method to retrieve HRX counters from FG
-          result = get_hrx_counters(np, opts[:vdom], ssh)
-          puts "HRXRESULT: #{result}" if debug
-
-          ### Call method to process, filter and add counter key/value pairs (returns hash)
-          hrxdata.merge!(process_counters(result, filter, np, logfile, opts, 'hrx'))
-          puts "HRXDATA: #{dcedata}" if debug
-        end
-      end
-
-      ### Call function to to get Anomaly Drop counters and return formatted
-      for np in opts[:npstart]..opts[:npstop]
-        if opts[:adropfilter]
-          filter = opts[:adropfilter].split
-
-          ### Call method to retrieve HRX counters from FG
-          result = get_adrop_counters(np, opts[:vdom], ssh)
-          puts "ADROPRESULT: #{result}" if debug
-
-          ### Call method to process, filter and add counter key/value pairs (returns hash)
-          adropdata.merge!(process_counters(result, filter, np, logfile, opts, 'adrop'))
-          puts "ADROPDATA: #{dcedata}" if debug
-        end
-      end
-    end
-  end
-### Rescue for SSH errors and others within ssh do
+  ssh = Net::SSH.start(opts[:host], opts[:user], :password => opts[:pass],:timeout => 2)
 rescue SocketError => e
   puts 'SOCKET ERROR: '+e.message
   logfile.write 'SOCKET ERROR: '+e.message+"\n" if opts[:logfile]
@@ -260,6 +199,65 @@ rescue Exception => e
   logfile.write 'EXCEPTION: '+e.message+"\n" if opts[:logfile]
   exit 1
 end
+
+logfile.write "--------#{Time.now}--------\n"
+
+### Get system performance stats for log file only (not for output to other systems/csv)
+if opts[:perfstat]
+  perfdata = get_sys_perf_stat(ssh, opts[:vdom], debug)
+  logfile.write perfdata
+end
+
+if opts[:dcefilter] || opts[:hrxfilter] || opts[:adropfilter]
+  ### Some stats are available only on per-np basis, we will loop through
+  ### and execute such commands in this loop
+
+  ### Call function to to get DCE counters and return formatted
+  for np in opts[:npstart]..opts[:npstop]
+    if opts[:dcefilter]
+      filter = opts[:dcefilter].downcase.split
+
+      ### Call method to retrieve DCE counters from FG
+      result = get_dce_counters(np, opts[:vdom], ssh)
+      puts "DCERESULT: #{result}" if debug
+
+      ### Call method to process, filter and add counter key/value pairs (returns hash)
+      dcedata.merge!(process_counters(result, filter, np, logfile, opts, 'dce'))
+      puts "DCEDATA: #{dcedata}" if debug
+    end
+  end
+
+  ### Call function to to get HRX counters and return formatted
+  for np in opts[:npstart]..opts[:npstop]
+    if opts[:hrxfilter]
+      filter = opts[:hrxfilter].downcase.split
+
+      ### Call method to retrieve HRX counters from FG
+      result = get_hrx_counters(np, opts[:vdom], ssh)
+      puts "HRXRESULT: #{result}" if debug
+
+      ### Call method to process, filter and add counter key/value pairs (returns hash)
+      hrxdata.merge!(process_counters(result, filter, np, logfile, opts, 'hrx'))
+      puts "HRXDATA: #{dcedata}" if debug
+    end
+  end
+
+  ### Call function to to get Anomaly Drop counters and return formatted
+  for np in opts[:npstart]..opts[:npstop]
+    if opts[:adropfilter]
+      filter = opts[:adropfilter].downcase.split
+
+      ### Call method to retrieve HRX counters from FG
+      result = get_adrop_counters(np, opts[:vdom], ssh)
+      puts "ADROPRESULT: #{result}" if debug
+
+      ### Call method to process, filter and add counter key/value pairs (returns hash)
+      adropdata.merge!(process_counters(result, filter, np, logfile, opts, 'adrop'))
+      puts "ADROPDATA: #{dcedata}" if debug
+    end
+  end
+end
+
 
 
 #########################################################
@@ -344,5 +342,6 @@ if opts[:outfile]
 end
 
 ### Cleanup ###
+ssh.close
 logfile.write "\n"
 logfile.close
