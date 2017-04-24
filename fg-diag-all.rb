@@ -32,6 +32,7 @@ where [options] are:
   opt :outfile, 'To output result to file, specify the path/to/file', :type => :string
   opt :nostdout, 'By default results are sent to stdout, set this to disable'
   opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile to be set)'
+  opt :arpcount, 'Count number of arp entries and output'
   opt :hwnicfilter, "Set to enable: output to filter for from diag hardware deviceinfo nic <port>", :type => :string
   opt :niclist, "If setting hwnicfilter then also set nics to query i.e. \"port27 port29 port30\"", :type => :string
   opt :dcefilter, 'Filter for NP DCE counters (if no filter, dce will be skipped)', :type => :string
@@ -60,7 +61,6 @@ if opts[:perfstat]
 end
 
 
-
 ### script variables
 debug = opts[:debug]
 output = String.new
@@ -70,6 +70,7 @@ hrxdata = Hash.new
 adropdata = Hash.new
 nicdata = Hash.new
 nic = Array.new
+arpcount = Hash.new
 
 ###########################################################################
 ### Methods
@@ -133,7 +134,23 @@ def get_hardware_nic_info(filter, iface, ssh, vdom)
   else
     r = ssh.exec!("config global\n diagnose hardware deviceinfo nic #{iface}")
   end
+
   r.downcase!
+end
+
+def get_arp_count(ssh, vdom, debug)
+  arpcount = Hash.new
+
+  if vdom == 'none'
+    r = ssh.exec!("diag ip arp list")
+  else
+    r = ssh.exec!("config vdom\n edit #{vdom}\n diag ip arp list")
+  end
+
+ ##TODO Add output checks (may want to modify existing with regex and then use for this, but will require modifying all)
+
+  arpcount['arpcount'] = r.lines.count.to_s
+  arpcount
 end
 
 def get_dce_counters(np, vdom, ssh)
@@ -247,7 +264,13 @@ logfile.write "--------#{Time.now}--------\n"
 ### Get system performance stats for log file only (not for output to other systems/csv)
 if opts[:perfstat]
   perfdata = get_sys_perf_stat(ssh, opts[:vdom], debug)
-  logfile.write perfdata
+  logfile.write perfdata if opts[:logfile]
+end
+
+### Get total arp entries from FG
+if opts[:arpcount]
+  arpcount = get_arp_count(ssh, opts[:vdom], debug)
+  logfile.write "ARP Count: #{arpcount['arpcount']}\n\n" if opts[:logfile]
 end
 
 ### Get diag hardware device info stats
@@ -321,7 +344,7 @@ end
 
 ### Create counter data in JSON output format
 if opts[:format] == 'json' || opts[:format] == 'json-pretty'
-  counterdata = {'date/time' => Time.now}
+  counterdata = {:date-time => Time.now}
   if dcedata.count > 0
     counterdata.store :dce, Hash.new
     dcedata.each do |key,val|
@@ -348,6 +371,10 @@ if opts[:format] == 'json' || opts[:format] == 'json-pretty'
     end
   end
 
+  if arpcount.count > 0
+    counterdata[:arpcount] = arpcount
+  end
+
   output = counterdata.to_json if opts[:format] == 'json'
   output = JSON.pretty_generate(counterdata) if opts[:format] == 'json-pretty'
 
@@ -358,6 +385,7 @@ else ### For all other data output formats
   counterdata.merge!(hrxdata)
   counterdata.merge!(adropdata)
   counterdata.merge!(nicdata)
+  counterdata.merge!(arpcount)
 
 ### Create counter data in CACTI output format
   if counterdata.count > 0 && opts[:format] == 'cacti'
