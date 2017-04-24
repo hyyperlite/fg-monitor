@@ -7,7 +7,7 @@ require 'trollop'
 require 'json'
 
 opts = Trollop::options do
-  version 'fg-diag-all v0.1 - 2017'
+  version 'fg-diag-all v0.1 - 2017 Carrier CSE'
   banner <<-EOS
 
 fg-diag-all -  a flexible multi-use tool for monitoring FG via CLI commands. Many commands useful for tracking
@@ -25,19 +25,41 @@ where [options] are:
   opt :host, 'Fortigate IP', :default => '192.168.1.1'
   opt :user, 'FortiGate Login Username', :default => 'admin'
   opt :pass, 'FortiGate Login Password', :default => ''
-  opt :vdom, 'Specify this flag if FortiGate is in VDOM mode', :default => 'root'
+  opt :vdom, 'Specify this flag if FortiGate is in VDOM mode', :default => 'none'
   opt :npstart, 'For queries of NP data, enter the first NP to query (first would be np zero)', :default => 0
   opt :npstop, 'For queries of NP data, enter the last NP to query for', :default => 0
-  opt :format, 'cacti, json, json-pretty, csv, tsv', :default => 'cacti'
+  opt :format, 'Output format for outfile and STDOUT. Options are: cacti, json, json-pretty, csv, tsv', :default => 'cacti'
   opt :outfile, 'To output result to file, specify the path/to/file', :type => :string
-  opt :nostdout, 'By default results are sent to stdout set this to disable'
-  opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile set)'
+  opt :nostdout, 'By default results are sent to stdout, set this to disable'
+  opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile to be set)'
+  opt :hwnicfilter, "Set to enable: output to filter for from diag hardware deviceinfo nic <port>", :type => :string
+  opt :niclist, "If setting hwnicfilter then also set nics to query i.e. \"port27 port29 port30\"", :type => :string
   opt :dcefilter, 'Filter for NP DCE counters (if no filter, dce will be skipped)', :type => :string
   opt :hrxfilter, 'Filter for NP HRX counters (if not filter, hrx will be skipped', :type => :string
-  opt :adropfilter, 'Filter for NP anomaly drop counters (if no filter anaomolies will be skipped', :type => :string
+  opt :adropfilter, 'Filter for NP anomaly drop counters (if no filter anaomoly drops will be skipped', :type => :string
   opt :logfile, 'path/to/logfile, no log file if not specified', :type => :string
   opt :debug, 'Enable additional console output (will break cacti processing)'
 end
+
+### Argument Checks
+
+# Ensure output format entered is valid
+unless opts[:format].downcase =~ /^(cacti|json|json-pretty|csv|tsv)$/
+  Trollop::die :format, ': format must be one of "cacti json json-pretty csv tsv"'
+end
+
+# Ensure that if --hwnicfilter was provided, --niclist must also be
+if opts[:hwnicfilter]
+Trollop::die :niclist, ': --niclist option should be set if using --hwnicfilter option' unless opts[:niclist]
+end
+
+# To avoid troubleshooting later, if --perf
+if opts[:perfstat]
+  Trollop::die :logfile, ': --perfstats is enabled but perfstats only outputs to log file, please also set\
+ --logfile option' unless opts[:logfile]
+end
+
+
 
 ### script variables
 debug = opts[:debug]
@@ -46,6 +68,8 @@ counterdata = Hash.new
 dcedata = Hash.new
 hrxdata = Hash.new
 adropdata = Hash.new
+nicdata = Hash.new
+nic = Array.new
 
 ###########################################################################
 ### Methods
@@ -93,7 +117,7 @@ def get_sys_perf_stat(ssh, vdom, debug)
         if element.include?('average') && rec[index+1].include?('sessions:')
           con += "1min:#{rec[index+2]} 10min:#{rec[index+7]} 30min:#{rec[index+12]}\n"
         end
-        if element.include?('average') && rec[index+1].include?('session')
+        if element.include?('average') && rec[index+1] == 'session'
           cps += "1min:#{rec[index+4]} 10min:#{index+12} 30min:#{rec[index+20]}\n"
         end
       #end
@@ -101,6 +125,15 @@ def get_sys_perf_stat(ssh, vdom, debug)
   end
   cpu += "\n"
   cpu + mem + con + cps + "\n"
+end
+
+def get_hardware_nic_info(filter, iface, ssh, vdom)
+  if vdom == 'none'
+    r = ssh.exec!("diagnose hardware deviceinfo nic #{iface}")
+  else
+    r = ssh.exec!("config global\n diagnose hardware deviceinfo nic #{iface}")
+  end
+  r.downcase!
 end
 
 def get_dce_counters(np, vdom, ssh)
@@ -133,7 +166,7 @@ def get_adrop_counters(np, vdom, ssh)
   r.downcase
 end
 
-def process_counters(r, filter, np, logfile, opts, type)
+def process_counters(r, filter, id, logfile, opts, type)
   ### Process counter results passed in as r, apply filter and return hash
   counters = Hash.new
 
@@ -150,12 +183,21 @@ def process_counters(r, filter, np, logfile, opts, type)
     ### and add to hash "counters"
     rec.each_with_index do |element, index|
       if filter.any? { |s| element.include? s }
-        nextindex = index +1
-        counters["np#{np}-#{element}"] = "#{rec[nextindex][1..-1].to_i.to_s}"
+        counters["np#{id}-#{element}"] = "#{rec[index+1][1..-1].to_i.to_s}" unless type == 'nic'
+
+        ### The sw_out_drop_pkts does not have spaces so doesn't get split properly initially
+        ### have to make a special exception for that one counter from diag hw devinfo nic
+        if type == 'nic' && element.include?('sw_out_drop_pkts')
+          tmp = element.split(':')
+          counters["#{id}-#{tmp[0]}"] = "#{tmp[1].to_i.to_s}"
+        elsif type == 'nic'
+          counters["#{id}-#{element}"] = "#{rec[index+1][1..-1].to_i.to_s}"
+        end
       end
     end
   end
-  logfile.write "NP#{np}: #{counters.to_json}\n" if opts[:logfile]
+  logfile.write "np#{id}-#{type}: #{counters.to_json}\n" if opts[:logfile] && type != 'nic'
+  logfile.write "#{id}: #{counters.to_json}\n" if opts[:logfile] && type == 'nic'
   counters
 end
 
@@ -206,6 +248,19 @@ logfile.write "--------#{Time.now}--------\n"
 if opts[:perfstat]
   perfdata = get_sys_perf_stat(ssh, opts[:vdom], debug)
   logfile.write perfdata
+end
+
+### Get diag hardware device info stats
+if opts[:hwnicfilter] && opts[:niclist]
+  nic = opts[:niclist].downcase.split
+  filter = opts[:hwnicfilter].downcase.split(" ")
+  nic.each do |x|
+    result = get_hardware_nic_info(filter, x, ssh, opts[:vdom])
+    puts "NICRESULT: #{result}" if debug
+
+    nicdata.merge!(process_counters(result, filter, x, logfile, opts, 'nic'))
+    puts "NICDATA: #{nicdata}" if debug
+  end
 end
 
 if opts[:dcefilter] || opts[:hrxfilter] || opts[:adropfilter]
@@ -266,7 +321,8 @@ end
 
 ### Create counter data in JSON output format
 if opts[:format] == 'json' || opts[:format] == 'json-pretty'
-if dcedata.count > 0
+  counterdata = {'date/time' => Time.now}
+  if dcedata.count > 0
     counterdata.store :dce, Hash.new
     dcedata.each do |key,val|
       counterdata[:dce].store key, val
@@ -284,6 +340,14 @@ if dcedata.count > 0
       counterdata[:anomaly_drop].store key, val
     end
   end
+
+  if nicdata.count > 0
+    counterdata.store :interface, Hash.new
+    nicdata.each do |key,val|
+      counterdata[:interface].store key, val
+    end
+  end
+
   output = counterdata.to_json if opts[:format] == 'json'
   output = JSON.pretty_generate(counterdata) if opts[:format] == 'json-pretty'
 
@@ -293,6 +357,7 @@ else ### For all other data output formats
   counterdata.merge!(dcedata)
   counterdata.merge!(hrxdata)
   counterdata.merge!(adropdata)
+  counterdata.merge!(nicdata)
 
 ### Create counter data in CACTI output format
   if counterdata.count > 0 && opts[:format] == 'cacti'
