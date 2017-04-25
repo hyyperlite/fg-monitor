@@ -12,7 +12,7 @@ opts = Trollop::options do
 
 fg-diag-all -  a flexible multi-use tool for monitoring FG via CLI commands. Many commands useful for tracking
 during troubleshooting and performance testing are not available via API or methods other than CLI.  Results can
-be formatted in json, csv, tsv or for consumption by Cacti.  Results can be output to stdout and/or a file.
+be formatted in json, csv, tsv or for consumption by Cacti.  Results can be output to stdout (default) and/or a file.
 Additionally, a logfile can be enabled where results are output in a more human readable format and errors may
 also be sent to this file for troubleshooting.
 
@@ -33,7 +33,7 @@ where [options] are:
   opt :nostdout, 'By default results are sent to stdout, set this to disable'
   opt :perfstat, 'Summarized get sys perf stat (output only to log file, requires --logfile to be set)'
   opt :arpcount, 'Count number of arp entries and output'
-  opt :hwnicfilter, "Set to enable: output to filter for from diag hardware deviceinfo nic <port>", :type => :string
+  opt :hwnicfilter, 'Set to enable: output to filter for from diag hardware deviceinfo nic <port>', :type => :string
   opt :niclist, "If setting hwnicfilter then also set nics to query i.e. \"port27 port29 port30\"", :type => :string
   opt :dcefilter, 'Filter for NP DCE counters (if no filter, dce will be skipped)', :type => :string
   opt :hrxfilter, 'Filter for NP HRX counters (if not filter, hrx will be skipped', :type => :string
@@ -69,7 +69,6 @@ dcedata = Hash.new
 hrxdata = Hash.new
 adropdata = Hash.new
 nicdata = Hash.new
-nic = Array.new
 arpcount = Hash.new
 
 ###########################################################################
@@ -128,7 +127,7 @@ def get_sys_perf_stat(ssh, vdom, debug)
   cpu + mem + con + cps + "\n"
 end
 
-def get_hardware_nic_info(filter, iface, ssh, vdom)
+def get_hardware_nic_info(iface, ssh, vdom)
   if vdom == 'none'
     r = ssh.exec!("diagnose hardware deviceinfo nic #{iface}")
   else
@@ -146,8 +145,6 @@ def get_arp_count(ssh, vdom, debug)
   else
     r = ssh.exec!("config vdom\n edit #{vdom}\n diag ip arp list")
   end
-
- ##TODO Add output checks (may want to modify existing with regex and then use for this, but will require modifying all)
 
   arpcount['arpcount'] = r.lines.count.to_s
   arpcount
@@ -204,8 +201,10 @@ def process_counters(r, filter, id, logfile, opts, type)
 
         ### The sw_out_drop_pkts does not have spaces so doesn't get split properly initially
         ### have to make a special exception for that one counter from diag hw devinfo nic
-        if type == 'nic' && element.include?('sw_out_drop_pkts')
-          tmp = element.split(':')
+        if type == 'nic' && (element.include?('sw_out_drop_pkts') || element.include?('sw_np_rx_mc_pkts') ||\
+                             element.include?('sw_np_rx_bc_pkts') || element.include?('sw_np_in_drop_pkts')) ||\
+                             element.include?('sw_np_out_drop_pkts')
+        tmp = element.split(':')
           counters["#{id}-#{tmp[0]}"] = "#{tmp[1].to_i.to_s}"
         elsif type == 'nic'
           counters["#{id}-#{element}"] = "#{rec[index+1][1..-1].to_i.to_s}"
@@ -223,7 +222,7 @@ def check_fgcmd_error(rec, type, opts)
   i = 0
   while i <= 2  # Only need to look at first few lines to identify this issue
     rec.each do |element|
-      if element.include?('Unknown')
+      if element.include?('6665: Unknown')
         puts "FGCMDERROR: Unknown Action - while processing: #{type}"
         logfile.write "FGCMDERROR: Unknown Action - while processing #{type}\n" if opts[:logfile]
         exit 1
@@ -232,6 +231,7 @@ def check_fgcmd_error(rec, type, opts)
     i += 1
   end
 end
+
 
 ###########################################################################
 ### Start Main
@@ -259,7 +259,7 @@ rescue Exception => e
   exit 1
 end
 
-logfile.write "--------#{Time.now}--------\n"
+logfile.write "--------#{Time.now}--------\n" if opts[:logfile]
 
 ### Get system performance stats for log file only (not for output to other systems/csv)
 if opts[:perfstat]
@@ -278,7 +278,7 @@ if opts[:hwnicfilter] && opts[:niclist]
   nic = opts[:niclist].downcase.split
   filter = opts[:hwnicfilter].downcase.split(" ")
   nic.each do |x|
-    result = get_hardware_nic_info(filter, x, ssh, opts[:vdom])
+    result = get_hardware_nic_info(x, ssh, opts[:vdom])
     puts "NICRESULT: #{result}" if debug
 
     nicdata.merge!(process_counters(result, filter, x, logfile, opts, 'nic'))
@@ -436,5 +436,5 @@ end
 
 ### Cleanup ###
 ssh.close
-logfile.write "\n"
-logfile.close
+logfile.write "\n" if opts[:logfile]
+logfile.close if opts[:logfile]
