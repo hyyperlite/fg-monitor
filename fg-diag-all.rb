@@ -1,6 +1,6 @@
 #!/usr/bin/ruby
 
-### Script for gathering diag and performance metrics from FortiGate
+### Script for gathering diag and performance metrics from FortiGate (FOS 5.2 and 5.4)
 
 require 'net/ssh'
 require 'trollop'
@@ -39,6 +39,7 @@ where [options] are:
   opt :hrxfilter, 'Filter for NP HRX counters (if not filter, hrx will be skipped', :type => :string
   opt :adropfilter, 'Filter for NP anomaly drop counters (if no filter anaomoly drops will be skipped', :type => :string
   opt :logfile, 'path/to/logfile, no log file if not specified', :type => :string
+  opt :fosver, 'version of FOS (5.2 | 5.4)', :default => '5.2'
   opt :debug, 'Enable additional console output (will break cacti processing)'
 end
 
@@ -74,11 +75,16 @@ arpcount = Hash.new
 ###########################################################################
 ### Methods
 ###########################################################################
-def get_sys_perf_stat(ssh, vdom, debug)
+#TODO merge all ssh data queries to single method that takes the cmd to run as argument
+
+def get_sys_perf_stat(ssh, vdom, debug, fosver)
   cpu = 'CPU IDLE: '
   mem = 'MEM USED: '
   con = 'SESSIONS: '
   cps = 'CPS: '
+
+  ### 5.2 and 5.4+ differ in the get sys perf stat output slightly, make necessary adjustments for idle cpu
+  fosver == "5.2" ? idleoffset = 8 : idleoffset = 10
 
   if vdom == 'none'
     r = ssh.exec!('get system performance status')
@@ -99,12 +105,12 @@ def get_sys_perf_stat(ssh, vdom, debug)
         if element.include? 'cpu'
           if element == 'cpu'
             ### Treat this one seperate as it is system wide averge utilization
-            cpu += "system:#{rec[index+10]} \n"
+            cpu += "system:#{rec[index+idleoffset]} \n"
           else
             if element[3..-1].to_i < 10
-              cpu += "#{element}:#{rec[index+10]} \t"
+              cpu += "#{element}:#{rec[index+idleoffset]} \t"
             else
-              cpu += "#{element}:#{rec[index+10]}\t"
+              cpu += "#{element}:#{rec[index+idleoffset]}\t"
             end
 
             ### Add newline after every 8 CPUS
@@ -201,11 +207,9 @@ def process_counters(r, filter, id, logfile, opts, type)
 
         ### The sw_out_drop_pkts does not have spaces so doesn't get split properly initially
         ### have to make a special exception for that one counter from diag hw devinfo nic
-        if type == 'nic' && (element.include?('sw_out_drop_pkts') || element.include?('sw_np_rx_mc_pkts') ||\
-                             element.include?('sw_np_rx_bc_pkts') || element.include?('sw_np_in_drop_pkts')) ||\
-                             element.include?('sw_np_out_drop_pkts')
-        tmp = element.split(':')
-          counters["#{id}-#{tmp[0]}"] = "#{tmp[1].to_i.to_s}"
+        if type == 'nic' && element.include?(':')
+          val = element.split(':')
+          counters["#{id}-#{val[0]}"] = "#{val[1].to_i.to_s}"
         elsif type == 'nic'
           counters["#{id}-#{element}"] = "#{rec[index+1][1..-1].to_i.to_s}"
         end
@@ -213,7 +217,7 @@ def process_counters(r, filter, id, logfile, opts, type)
     end
   end
   logfile.write "np#{id}-#{type}: #{counters.to_json}\n" if opts[:logfile] && type != 'nic'
-  logfile.write "#{id}: #{counters.to_json}\n" if opts[:logfile] && type == 'nic'
+  logfile.write "#{id}: #{counters.to_json}\n\n" if opts[:logfile] && type == 'nic'
   counters
 end
 
@@ -263,7 +267,7 @@ logfile.write "--------#{Time.now}--------\n" if opts[:logfile]
 
 ### Get system performance stats for log file only (not for output to other systems/csv)
 if opts[:perfstat]
-  perfdata = get_sys_perf_stat(ssh, opts[:vdom], debug)
+  perfdata = get_sys_perf_stat(ssh, opts[:vdom], debug, opts[:fosver])
   logfile.write perfdata if opts[:logfile]
 end
 
@@ -420,8 +424,7 @@ else ### For all other data output formats
 end
 
 ### Write results to STDOUT
-#puts output unless opts[:nostdout]
-puts output
+puts output unless opts[:nostdout]
 
 if opts[:outfile]
   begin
