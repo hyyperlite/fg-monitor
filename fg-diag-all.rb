@@ -75,16 +75,22 @@ arpcount = Hash.new
 ###########################################################################
 ### Methods
 ###########################################################################
-#TODO merge all ssh data queries to single method that takes the cmd to run as argument
 
-def get_sys_perf_stat(ssh, vdom, debug, fosver)
+# Executes "get system performance status" on FortiGate via SSH
+#
+# @param ssh [#Net::SSH]
+# @param vdom [String] determine if FG is in VDOM mode
+# @param opts [Hash] program options
+# @param fosver [String] specifies the FortiOS version (5.2|5.4)
+# @return [String] results of perstat in human consumable format
+def get_sys_perf_stat(ssh, vdom, opts, fosver)
   cpu = 'CPU IDLE: '
   mem = 'MEM USED: '
   con = 'SESSIONS: '
   cps = 'CPS: '
 
   ### 5.2 and 5.4+ differ in the get sys perf stat output slightly, make necessary adjustments for idle cpu
-  fosver == "5.2" ? idleoffset = 8 : idleoffset = 10
+  fosver == '5.2' ? idleoffset = 8 : idleoffset = 10
 
   if vdom == 'none'
     r = ssh.exec!('get system performance status')
@@ -98,7 +104,7 @@ def get_sys_perf_stat(ssh, vdom, debug, fosver)
     rec = x.split
 
     ### Check for obvious errors due to cmds sent to FG
-    check_fgcmd_error(rec, 'perfstat', debug)
+    check_fgcmd_error(rec, 'perfstat', opts)
 
     rec.each_with_index do |element, index|
       #if filter.any? { |s| element.include? s}
@@ -133,7 +139,13 @@ def get_sys_perf_stat(ssh, vdom, debug, fosver)
   cpu + mem + con + cps + "\n"
 end
 
-def get_hardware_nic_info(iface, ssh, vdom)
+# Executes "diag hardware device info nic <nic>" on FG to grab interface hardware counters
+#
+# @param iface [String] interface to execute command for
+# @param ssh [Object (net/ssh)
+# @param vdom [String] determine if FG is in VDOM mode
+# @return [String] a string containing unformatted output from FG cmd
+def get_hardware_nic_info(ssh, iface, vdom)
   if vdom == 'none'
     r = ssh.exec!("diagnose hardware deviceinfo nic #{iface}")
   else
@@ -143,11 +155,17 @@ def get_hardware_nic_info(iface, ssh, vdom)
   r.downcase!
 end
 
-def get_arp_count(ssh, vdom, debug)
+# Executes "diag ip arp list" on FG and calculates total number of current arp entries
+#
+# @param ssh [Object net/ssh]
+# @vdom [String] identifies if FG is in vdom mode
+# @debug [String] identify if debugging is enabled
+# @return [String] a string with a single value representing total number of arp entries
+def get_arp_count(ssh, vdom)
   arpcount = Hash.new
 
   if vdom == 'none'
-    r = ssh.exec!("diag ip arp list")
+    r = ssh.exec!('diag ip arp list')
   else
     r = ssh.exec!("config vdom\n edit #{vdom}\n diag ip arp list")
   end
@@ -156,6 +174,12 @@ def get_arp_count(ssh, vdom, debug)
   arpcount
 end
 
+# Execute "diag npu np6 dce-all <np>" to retrieve a list of all NP DCE counters
+#
+# @param np [String] the NP6 to execute the command for
+# @param vdom [String] determine if FG is in VDOM mode
+# @param ssh [Object net/ssh]
+# @return [String] Unformatted, downcased string with results from executed command
 def get_dce_counters(np, vdom, ssh)
   ### Execute diag npu np6 dce-all <np>
   if vdom == 'none'
@@ -166,6 +190,12 @@ def get_dce_counters(np, vdom, ssh)
   r.downcase
 end
 
+# Execute "diag npu np6 hrx-drop-all <np>" on FG to get all hrx-drop counter detail
+#
+# @param np [String] the NP6 to execute the command for
+# @param vdom [String] determine if FG is in VDOM mode
+# @param ssh [Object net/ssh]
+# @return [String] Unformatted, downcased string with results from executed command
 def get_hrx_counters(np, vdom, ssh)
   ### Execute diag npu np6 dce-all <np>
   if vdom == 'none'
@@ -176,6 +206,12 @@ def get_hrx_counters(np, vdom, ssh)
   r.downcase
 end
 
+# Execute "diag npu np6 anomaly-drop-all <npu>" on FG to get all anomaly-drop counter detail
+#
+# @param np [String] the NP6 to execute the command for
+# @param vdom [String] determin if FG is in VDOM mode
+# @param ssh [Object net/ssh]
+# @return [String] Unformatted, downcased string with restuls from executed command
 def get_adrop_counters(np, vdom, ssh)
   ### Execute diag npu np6 dce-all <np>
   if vdom == 'none'
@@ -186,6 +222,16 @@ def get_adrop_counters(np, vdom, ssh)
   r.downcase
 end
 
+# Receives string of counters, applies filters to identify counters we want to report on
+# processes the interesting counters and returns them as a hash.  Also, if logfile is enabled
+# write the interesting counter detail in human consumable format to logfile
+#
+# @param r [String] contains counter detail from FG
+# @param filter [String] contains space seperated list of counter names to match (or partially match)
+# @param id [String] identifier for the data "r" that was passed, might be np id or intf id etc
+# @param opts [Object File] program options
+# @param type [String] type of data "r" being passed (aka dce counters, interface counters, etc)
+# @return [Hash] returns a hash containing interesting counter names and values
 def process_counters(r, filter, id, logfile, opts, type)
   ### Process counter results passed in as r, apply filter and return hash
   counters = Hash.new
@@ -221,6 +267,12 @@ def process_counters(r, filter, id, logfile, opts, type)
   counters
 end
 
+# Checks data passed as rec for common errors output by FG due to bad command or context
+#
+# @param rec [Array] contains subset of details from FG ssh cmd query
+# @param type [String] contains identifier for what type of data "rec" contains
+# @param opts [Hash] program options
+# @return [nil]
 def check_fgcmd_error(rec, type, opts)
   ### Check for error with commands sent to FG (usually due to vdom/non-vdom mode)
   i = 0
@@ -234,6 +286,7 @@ def check_fgcmd_error(rec, type, opts)
     end
     i += 1
   end
+  nil
 end
 
 
@@ -273,16 +326,16 @@ end
 
 ### Get total arp entries from FG
 if opts[:arpcount]
-  arpcount = get_arp_count(ssh, opts[:vdom], debug)
+  arpcount = get_arp_count(ssh, opts[:vdom])
   logfile.write "ARP Count: #{arpcount['arpcount']}\n\n" if opts[:logfile]
 end
 
 ### Get diag hardware device info stats
 if opts[:hwnicfilter] && opts[:niclist]
   nic = opts[:niclist].downcase.split
-  filter = opts[:hwnicfilter].downcase.split(" ")
+  filter = opts[:hwnicfilter].downcase.split(' ')
   nic.each do |x|
-    result = get_hardware_nic_info(x, ssh, opts[:vdom])
+    result = get_hardware_nic_info(ssh, x, opts[:vdom])
     puts "NICRESULT: #{result}" if debug
 
     nicdata.merge!(process_counters(result, filter, x, logfile, opts, 'nic'))
